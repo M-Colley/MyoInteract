@@ -122,12 +122,9 @@ class CumulativeFatigue():
         idxs = self._MA >= self.TL
         C[idxs] = self._LR[idxs] * (self.TL[idxs] - self._MA[idxs])
 
-        # Calculate rR
-        rR = np.zeros_like(self._MA)
-        idxs = self._MA >= self.TL
-        rR[idxs] = (self._r*self._R)[idxs]
-        idxs = self._MA < self.TL
-        rR[idxs] = self._R[idxs]
+        # Calculate rR: the recovery multiplier r acts only at rest (Rakshit et al. 2021, Eq. 7:
+        # r = k if TL = 0, r = 1 if TL > 0); TL <= 0 also covers commands below a muscle's zero
+        rR = np.where(self.TL <= 0, self._r*self._R, self._R)
 
         # Clip C(t) if needed, to ensure that MA, MR, and MF remain between 0 and 1
         C = np.clip(C, np.maximum(-self._MA/self._dt + self._F*self._MA, (self._MR - 1)/self._dt + rR*self._MF),
