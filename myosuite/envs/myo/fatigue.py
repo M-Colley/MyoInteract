@@ -37,7 +37,7 @@ MUSCLE_FATIGUE_PARAMS = {
     "Wrist": {"F": 0.01227, "R": 0.00134, "r": 9.10},  #from Hand group (https://doi.org/10.1016/j.jbiomech.2021.110695)
     "Finger": {"F": 0.01227, "R": 0.00134, "r": 9.10},  #from Hand group (https://doi.org/10.1016/j.jbiomech.2021.110695)
     "Knee": {"F": 0.00825, "R": 0.00076, "r": 14.85},
-    "Shoulder": {"F": 0.00825, "R": 0.00076, "r": 14.85},  #Shoulder values from Looft & Frey-Law 2020 (https://doi.org/10.1016/j.jbiomech.2020.109762)
+    "Shoulder": {"F": 0.01820, "R": 0.00168, "r": 15},  #shoulder F, R from Frey-Law, Looft & Heitsman 2012 (Table 1, https://pmc.ncbi.nlm.nih.gov/articles/PMC3397684/); r=15 from Looft & Frey-Law 2020 (https://doi.org/10.1016/j.jbiomech.2020.109762)
 
     "Default": {"F": 0.00970, "R": 0.00091, "r": 15},  #default values from Looft et al. 2018 (https://doi.org/10.1016/j.jbiomech.2018.06.005); NOTE: r=30 is better for hand/wrist/finger muscles (see https://doi.org/10.1016/j.jbiomech.2020.109762)
 }
@@ -72,8 +72,8 @@ class CumulativeFatigue():
         self._R = np.zeros((self.na,))
         for i in range(self.na):
             self._r[i] = MUSCLE_FATIGUE_PARAMS.get(self.MFG[i], MUSCLE_FATIGUE_PARAMS[self.MFG[i].split("-")[0]]).get("r", MUSCLE_FATIGUE_PARAMS["Default"]["r"])
-            self._F[i] = MUSCLE_FATIGUE_PARAMS.get(self.MFG[i], MUSCLE_FATIGUE_PARAMS[self.MFG[i].split("-")[0]]).get("F", MUSCLE_FATIGUE_PARAMS["Default"]["r"]) 
-            self._R[i] = MUSCLE_FATIGUE_PARAMS.get(self.MFG[i], MUSCLE_FATIGUE_PARAMS[self.MFG[i].split("-")[0]]).get("R", MUSCLE_FATIGUE_PARAMS["Default"]["r"])
+            self._F[i] = MUSCLE_FATIGUE_PARAMS.get(self.MFG[i], MUSCLE_FATIGUE_PARAMS[self.MFG[i].split("-")[0]]).get("F", MUSCLE_FATIGUE_PARAMS["Default"]["F"])
+            self._R[i] = MUSCLE_FATIGUE_PARAMS.get(self.MFG[i], MUSCLE_FATIGUE_PARAMS[self.MFG[i].split("-")[0]]).get("R", MUSCLE_FATIGUE_PARAMS["Default"]["R"])
 
         # self._r = self._r * np.ones((self.na,))
         # self._F = self._F * np.ones((self.na,))

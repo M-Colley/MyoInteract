@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from myosuite.envs.myo.fatigue import CumulativeFatigue
+from myosuite.envs.myo.fatigue import MUSCLE_FATIGUE_PARAMS, CumulativeFatigue
 
 F, R, r, DT = 0.01, 0.001, 150.0, 0.02
 
@@ -37,3 +37,10 @@ def _applied_recovery_rate(ma, mr, mf, tl):
 )
 def test_rest_multiplier_only_at_rest(ma, mr, mf, tl, expected):
     assert _applied_recovery_rate(ma, mr, mf, tl) == pytest.approx(expected, rel=1e-9)
+
+
+def test_shoulder_row_is_the_published_shoulder_fit():
+    # Frey-Law, Looft & Heitsman 2012, Table 1 (it was a copy of the Knee row)
+    shoulder = MUSCLE_FATIGUE_PARAMS["Shoulder"]
+    assert (shoulder["F"], shoulder["R"]) == (0.01820, 0.00168)
+    assert shoulder != MUSCLE_FATIGUE_PARAMS["Knee"]
