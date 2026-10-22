@@ -1,4 +1,4 @@
-include README_MYOSUITE.md PROJECT_REVIEW.md uv.lock myointeract_ui.ipynb env.yml
+include README_MYOSUITE.md PROJECT_REVIEW.md IMPLEMENTATION.md uv.lock myointeract_ui.ipynb env.yml
 recursive-include gradio_configs *.json
 recursive-include scripts *.py
 recursive-include tests *.py

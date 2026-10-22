@@ -15,7 +15,7 @@ The findings below establish problems in this checkout. They do not establish wh
 - Reproductions used unchanged methods/callbacks extracted through Python AST, small test environments, temporary directories, and direct MuJoCo model loading. The actual arm XML compiled successfully.
 - Installed JAX is 0.9.2 and MuJoCo is 3.6.0; the project pins JAX below 0.6.0 and MuJoCo to 3.3.5. These isolated checks are evidence of source-level defects, not validation of the pinned stack.
 - Brax, MuJoCo Playground, and Gradio are absent locally. Full PPO training, GPU execution, renderer integration, and a full UI session were not run. Integration acceptance checks are specified per proposal.
-- No implementation changes or remote PRs were created. This report is the only repository addition.
+- At the time of the initial review, no implementation changes or remote PRs had been created. The subsequent implementation and verification are mapped in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 P1 means fix before relying on new training runs or the advertised workflow. P2 means a concrete correctness, reliability, or reproducibility fix. P3 means an improvement to plan after the urgent fixes.
 
