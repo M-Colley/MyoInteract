@@ -35,7 +35,7 @@ from myosuite.envs.myo.myouser.utils import render_traj, ProgressLogger, set_glo
 from myosuite.envs.myo.myouser.paths import get_logs_dir
 from myosuite.envs.myo.myouser.presets import validate_preset_name
 from myosuite.envs.myo.myouser.validation import validate_training_config
-from myosuite.utils.run_manifest import create_run_manifest, write_run_manifest
+from myosuite.utils.run_manifest import create_run_manifest, update_manifest_config, write_run_manifest
 from etils import epath
 import jax
 import jax.numpy as jp
@@ -171,6 +171,10 @@ def train(cfg: Config):
                     rscope_envs=config.run.rscope_envs,
                     deterministic_rscope=config.run.deterministic_rscope,
                     seed=config.run.seed)
+  effective_config = config.to_dict()
+  effective_config['env'] = env._config.to_dict()
+  update_manifest_config(manifest, effective_config)
+  write_run_manifest(logdir, manifest)
   if ppo_params.num_timesteps > 0:
     print("Done training.")
   else:

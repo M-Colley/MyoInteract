@@ -1,7 +1,8 @@
 MyoInteract reliability implementation
 
-All 15 proposals in `PROJECT_REVIEW.md` are implemented in six draft PRs. They
-form an ordered stack: merge #4 through #9 in sequence. Later aggregate PR diffs
+All 15 proposals in `PROJECT_REVIEW.md` are implemented in six proposal PRs plus
+a final pretrained-checkpoint compatibility PR. They form an ordered stack:
+merge #4 through #10 in sequence. Later aggregate PR diffs
 contain their predecessors until those changes land; each description links its
 focused implementation commit.
 
@@ -25,9 +26,11 @@ focused implementation commit.
 
 Local validation on Windows, Python 3.12.10, JAX 0.5.3, MuJoCo 3.3.5:
 
-- `pytest -q --timeout=300`: **140 passed**.
+- `pytest -q --timeout=300`: **146 passed**.
 - Real custom PPO update (64 steps) and real Orbax checkpoint round trip with
   exactly equal deterministic actions, including observation normalization.
+- All three actual shipped policy checkpoints restore on CPU and produce
+  finite 26-element actions from their matching environment observations.
 - Real MJX evaluations of all three shipped tasks with seed 0, one episode per
   task, and a two-control-step smoke limit. Returns are finite and the reported
   reward components sum to the optimized reward.
@@ -57,3 +60,11 @@ autoreset/evaluation contracts and absence of JAX tracer leaks with a renderer
 test double. Historical tracked policies were not retrained. Existing motor
 noise, fatigue and scientific movement metrics remain in PRs #1, #2 and #3;
 this stack complements them and does not duplicate their implementations.
+
+Final integration additionally found that the mobile/public policy normalizers
+and first-layer weights expect 54 features while their historical configuration
+declares 49. The saved mean/std/variance tails are exactly duplicated. [PR #10](https://github.com/MyoInteract/MyoInteract/pull/10)
+reconstructs only that proven legacy feature layout, records it in the effective
+configuration, preserves input files/weights, and rejects unrecognized shape
+mismatches. All three actual shipped policies are checked with their restored
+parameters; this is separate from the zero-policy physics smoke protocol above.

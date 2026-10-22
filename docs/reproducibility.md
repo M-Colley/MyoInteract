@@ -22,6 +22,15 @@ that trains after loading is labeled `parameter_warm_start`; `play_only` and
 environment evaluation mode are labeled `evaluation`. Evaluation never writes
 to the source checkpoint directory or changes the caller's configuration.
 
+The shipped mobile/public policies contain 54 input features although their
+historical JSON declares 49. Their saved means, standard deviations and variance
+accumulators prove that the final five target features were duplicated during
+training. The loader recognizes only this exact legacy feature layout and
+duplicate-statistics signature, reconstructs those target features on a private
+configuration, and records the migration in the effective run configuration.
+It preserves the policy weights and source checkpoint files. Other observation
+shape mismatches fail explicitly rather than padding or truncating features.
+
 The benchmark covers `ar`, `mobile-typing-5c-words`, and
 `public-display-4-buttons`. Their reference task configurations are bundled with
 the package. With a source checkout's tracked policy files, run:

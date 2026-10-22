@@ -5,7 +5,7 @@ import subprocess
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from myosuite.utils.run_manifest import _git_revision, checkpoint_digest, create_run_manifest, write_run_manifest
+from myosuite.utils.run_manifest import _git_revision, checkpoint_digest, create_run_manifest, update_manifest_config, write_run_manifest
 
 
 def test_manifest_detaches_config_and_identifies_warm_start(tmp_path, monkeypatch):
@@ -30,6 +30,20 @@ def test_manifest_digest_tracks_configuration_and_evaluation_mode():
     assert first["restore"]["mode"] == "evaluation"
     cfg["rl"]["num_timesteps"] = 32
     assert create_run_manifest(cfg)["config_sha256"] != first["config_sha256"]
+
+
+def test_manifest_records_effective_environment_migrations():
+    cfg = {"env": {"task_config": {"obs_keys": ["qpos"]}}, "run": {}, "rl": {}}
+    manifest = create_run_manifest(cfg)
+    original_digest = manifest["config_sha256"]
+    original_creation = manifest["created_at"]
+    cfg["env"]["task_config"]["obs_keys"].append("target_pos")
+    update_manifest_config(manifest, cfg)
+    assert manifest["config"]["env"]["task_config"]["obs_keys"] == ["qpos", "target_pos"]
+    assert manifest["config_sha256"] != original_digest
+    assert manifest["created_at"] == original_creation
+    cfg["env"]["task_config"]["obs_keys"].clear()
+    assert manifest["config"]["env"]["task_config"]["obs_keys"] == ["qpos", "target_pos"]
 
 
 def test_wheel_does_not_borrow_enclosing_project_revision(tmp_path):

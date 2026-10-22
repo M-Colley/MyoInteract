@@ -35,6 +35,17 @@ def checkpoint_digest(path):
     return digest.hexdigest()
 
 
+def update_manifest_config(manifest, config):
+    """Record effective migrations while keeping the original run provenance."""
+    if hasattr(config, "to_dict"):
+        config = config.to_dict()
+    effective = json.loads(json.dumps(config, allow_nan=False))
+    canonical = json.dumps(effective, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    manifest["config"] = effective
+    manifest["config_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return manifest
+
+
 def _git_revision(source):
     def git(*args):
         result = subprocess.run(

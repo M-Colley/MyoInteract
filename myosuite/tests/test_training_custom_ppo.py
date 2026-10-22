@@ -4,6 +4,7 @@ import functools
 
 import jax
 import numpy as np
+import pytest
 
 from myosuite.tests.test_training_wrappers import ToyEnv
 from myosuite.train.myouser.custom_ppo import checkpoint
@@ -59,3 +60,11 @@ def test_project_checkpoint_roundtrip_preserves_deterministic_policy(tmp_path):
     original_action = make_policy(params, deterministic=True)(observation, key)[0]
     restored_action = restored_policy(restored_params, deterministic=True)(observation, key)[0]
     np.testing.assert_allclose(original_action, restored_action, rtol=0, atol=0)
+
+
+def test_checkpoint_restore_rejects_an_unknown_observation_width(monkeypatch):
+    _, params, _ = train_toy(num_timesteps=0)
+    unknown_normalizer = params[0].replace(mean=jax.numpy.zeros(4))
+    monkeypatch.setattr(checkpoint, 'load', lambda path: (unknown_normalizer, params[1]))
+    with pytest.raises(ValueError, match='Checkpoint observation shape does not match'):
+        train_toy(num_timesteps=0, restore_checkpoint_path='unknown-shape')

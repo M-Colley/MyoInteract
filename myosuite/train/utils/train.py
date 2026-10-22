@@ -23,6 +23,7 @@ from collections import defaultdict
 # from brax.training.agents.ppo import train as ppo
 
 from myosuite.train.myouser.custom_ppo import train as ppo
+from myosuite.train.myouser.custom_ppo import checkpoint as ppo_checkpoint
 from myosuite.train.myouser.custom_ppo import networks_vision_unified as networks
 from myosuite.train.utils.wrapper import wrap_myosuite_training, _maybe_wrap_env_for_evaluation
 from myosuite.envs.myo.myouser.evaluate import evaluate_policy
@@ -365,6 +366,63 @@ def checkpoint_config_path(checkpoint_path):
     return (path if path.name == 'checkpoints' else path.parent) / 'config.json'
 
 
+def adapt_legacy_checkpoint_observations(env, env_cfg, checkpoint_params):
+    """Recover the witnessed duplicated omni tail in historical policies.
+
+    Older environment construction appended omni keys to a shared base list a
+    second time.  Two bundled policies were trained on that repeated feature
+    tail although their saved JSON contains only the original base list.  Only
+    an exact schema, width and three matching normalizer-statistic tails permit
+    this migration; model weights and normalizer values are never changed.
+    """
+    base_keys = ['qpos', 'qvel', 'qacc', 'ee_pos', 'act']
+    omni_keys = ['target_pos', 'target_size', 'phase']
+    if (list(env_cfg.task_config.obs_keys) != base_keys
+            or list(env_cfg.task_config.omni_keys) != omni_keys):
+        return None
+    base_size = (len(env._independent_qpos) + 2 * len(env._independent_dofs)
+                 + 3 + env._na)
+    current_size = base_size + 5
+    normalizer = checkpoint_params[0]
+    saved_size = np.asarray(normalizer.mean).shape
+    if saved_size == (current_size,):
+        return None
+    stats = [np.asarray(getattr(normalizer, field))
+             for field in ('mean', 'std', 'summed_variance')]
+    proven_duplicate = (
+        base_size == 44
+        and saved_size == (54,)
+        and float(np.asarray(normalizer.count)) > 0
+        and all(value.shape == (54,) and np.isfinite(value).all()
+                and np.array_equal(value[44:49], value[49:54]) for value in stats)
+        and np.any(stats[2][44:49] > 0)
+        and list(env.obs_keys) == base_keys + omni_keys
+    )
+    if not proven_duplicate:
+        raise ValueError(
+            f'Checkpoint observation shape {saved_size} differs from configured '
+            f'({current_size},); no verified legacy observation migration applies.'
+        )
+    migration = {
+        'kind': 'legacy_duplicated_omni_keys',
+        'configured_observation_size': current_size,
+        'checkpoint_observation_size': 54,
+        'duplicated_keys': omni_keys,
+        'evidence': 'exact repeated mean, std and summed_variance tails',
+    }
+    # This is the private configuration copied by train_or_load_checkpoint.
+    # The regular setup appends omni_keys once, yielding the saved feature list.
+    env_cfg.task_config.obs_keys = base_keys + omni_keys
+    env.obs_keys = base_keys + omni_keys + omni_keys
+    env._config.task_config.obs_keys = list(env_cfg.task_config.obs_keys)
+    with env_cfg.unlocked():
+        env_cfg.checkpoint_observation_migrations = [migration]
+    with env._config.unlocked():
+        env._config.checkpoint_observation_migrations = [migration]
+    logging.warning('Restoring verified legacy duplicated omni observations (49 -> 54).')
+    return migration
+
+
 def train_or_load_checkpoint(env_name, 
                     config,
                     eval_mode=False,
@@ -422,14 +480,17 @@ def train_or_load_checkpoint(env_name,
         print(f"Checkpoint path: {ckpt_path}")
     else:
         assert checkpoint_path is not None, "Either logdir or checkpoint_path must be provided"
-    if ckpt_path is not None:
-        with open(ckpt_path / "config.json", "w", encoding="utf-8") as fp:
-            json.dump(config.to_dict(), fp, indent=4)
-
     if vision:
         env_cfg.vision.render_batch_size = ppo_params.num_envs
         env_cfg.vision.num_worlds = ppo_params.num_envs
     env = registry.load(env_name, config=env_cfg)
+    if restore_checkpoint_path is not None and not vision and hasattr(env, 'obs_keys'):
+        adapt_legacy_checkpoint_observations(
+            env, env_cfg, ppo_checkpoint.load(restore_checkpoint_path)
+        )
+    if ckpt_path is not None:
+        with open(ckpt_path / "config.json", "w", encoding="utf-8") as fp:
+            json.dump(config.to_dict(), fp, indent=4)
     
 
     training_params = dict(ppo_params)
