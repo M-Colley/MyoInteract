@@ -1,7 +1,9 @@
 # Reproducible runs and regression benchmarks
 
 Use Python 3.11 or 3.12 and `uv sync --frozen --extra test` for the locked CPU
-environment. Add `--extra cuda` on supported Linux CUDA systems. Before first
+environment. Add `--extra cuda` on supported Linux CUDA systems to install the
+matching CUDA libraries through pip, or use `--extra cuda-local` with an existing
+compatible CUDA/cuDNN toolkit (as in `env.yml`). Before first
 import in a fresh test environment, run `uv run python scripts/prepare_test_assets.py`.
 This prepares the exact Menagerie revision requested by the pinned Playground
 package, with only metadata checked out; the MyoInteract models ship here.
