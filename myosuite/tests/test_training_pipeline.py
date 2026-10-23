@@ -78,6 +78,121 @@ def test_checkpoint_resolver_ignores_metadata_and_reports_empty_roots(tmp_path):
     assert training.resolve_checkpoint_path(root).name == '10'
 
 
+def _capture_pipeline(monkeypatch):
+    raw_env = SimpleNamespace(enable_eval_mode=lambda: None)
+    monkeypatch.setattr(training.registry, 'load', lambda *a, **kw: raw_env)
+    monkeypatch.setattr(training, 'wrap_myosuite_training', lambda *a, **kw: SimpleNamespace(unwrapped=raw_env, vision_env=raw_env))
+    monkeypatch.setattr(training, 'ProgressEvalLogger', lambda **kwargs: SimpleNamespace(progress_eval_run=lambda *a, **kw: None))
+    calls = []
+    monkeypatch.setattr(training.ppo, 'train', lambda **kwargs: calls.append(kwargs) or ('policy', 'params', {}))
+    return calls
+
+
+@pytest.mark.parametrize('steps,checkpoints,expected', [(100, 2, True), (100, 0, False), (0, 1, False)])
+def test_full_state_snapshot_output_is_automatic_only_for_training(tmp_path, monkeypatch, steps, checkpoints, expected):
+    config = minimal_config()
+    config.rl.num_timesteps = steps
+    config.rl.num_checkpoints = checkpoints
+    original = copy.deepcopy(config.to_dict())
+    calls = _capture_pipeline(monkeypatch)
+    training.train_or_load_checkpoint('fixture', config, logdir=tmp_path)
+    assert calls[0]['save_training_state_path'] == (tmp_path / 'training_state' if expected else None)
+    assert calls[0]['resume_training_path'] is None
+    assert calls[0]['resume_metadata']['environment_name'] == 'fixture'
+    assert calls[0]['resume_metadata']['environment']['muscle_config']['noise_params']['sigdepnoise_type'] is None
+    assert config.to_dict() == original
+
+
+def test_fresh_multihost_training_keeps_policy_only_checkpoints(tmp_path, monkeypatch):
+    config = minimal_config()
+    calls = _capture_pipeline(monkeypatch)
+    monkeypatch.setattr(training.jax, 'process_count', lambda: 2)
+    training.train_or_load_checkpoint('fixture', config, logdir=tmp_path)
+    assert calls[0]['save_training_state_path'] is None
+    assert calls[0]['resume_training_path'] is None
+    assert calls[0]['policy_params_fn_checkpoints'] is not None
+
+
+def test_exact_resume_forwards_full_state_without_policy_loading_or_legacy_adapter(tmp_path, monkeypatch):
+    config = minimal_config()
+    config.rl.resume_training_path = str(tmp_path / 'source-run')
+    original = copy.deepcopy(config.to_dict())
+    source = tmp_path / 'source-run' / 'training_state' / '000000000020'
+    source.mkdir(parents=True)
+    marker = source / 'marker'
+    marker.write_bytes(b'complete training state')
+    resolved = []
+    monkeypatch.setattr(training, 'resolve_training_resume_path', lambda path: resolved.append(path) or source)
+    calls = _capture_pipeline(monkeypatch)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Exact resume must not load policy-only checkpoints or migrate legacy observations')
+
+    monkeypatch.setattr(training, 'adapt_legacy_checkpoint_observations', forbidden)
+    monkeypatch.setattr(training.ppo_checkpoint, 'load', forbidden)
+    output = tmp_path / 'continued-run'
+    training.train_or_load_checkpoint('fixture', config, logdir=output)
+    assert resolved == [str(tmp_path / 'source-run')]
+    assert calls[0]['resume_training_path'] == source
+    assert calls[0]['restore_checkpoint_path'] is None
+    assert calls[0]['save_training_state_path'] == output / 'training_state'
+    assert config.to_dict() == original
+    assert marker.read_bytes() == b'complete training state'
+    assert list(source.iterdir()) == [marker]
+
+
+@pytest.mark.parametrize('updates,eval_mode,match', [
+    ({'run': {'play_only': True}}, False, 'evaluation mode'),
+    ({'rl': {'load_checkpoint_path': 'policy/checkpoints/20'}}, False, 'not both'),
+    ({'rl': {'num_timesteps': 0}}, False, 'positive'),
+    ({'vision': {'enabled': True}}, False, 'without vision'),
+    ({}, True, 'evaluation mode'),
+])
+def test_invalid_resume_modes_fail_before_environment_or_output(tmp_path, monkeypatch, updates, eval_mode, match):
+    config = minimal_config()
+    config.rl.resume_training_path = 'source/training_state'
+    for section, values in updates.items():
+        config[section].update(values)
+    monkeypatch.setattr(training.registry, 'load', lambda *a, **kw: pytest.fail('Environment allocated before resume validation'))
+    with pytest.raises(ValueError, match=match):
+        training.train_or_load_checkpoint('fixture', config, logdir=tmp_path / 'output', eval_mode=eval_mode)
+    assert not (tmp_path / 'output').exists()
+
+
+def test_historical_policy_directory_is_not_an_exact_resume(tmp_path, monkeypatch):
+    config = minimal_config()
+    policy = tmp_path / 'checkpoints' / '20'
+    policy.mkdir(parents=True)
+    config.rl.resume_training_path = str(policy)
+    monkeypatch.setattr(training.registry, 'load', lambda *a, **kw: pytest.fail('Policy-only resume must fail before environment allocation'))
+    with pytest.raises(ValueError, match='(?i)(policy|warm|training.state)'):
+        training.train_or_load_checkpoint('fixture', config, logdir=tmp_path / 'output')
+    assert not (tmp_path / 'output').exists()
+
+
+def test_resume_context_detects_changed_model_assets_with_identical_path():
+    import mujoco
+    config = minimal_config()
+    first = mujoco.MjModel.from_xml_string('<mujoco><worldbody><geom type="sphere" size=".1"/></worldbody></mujoco>')
+    same = mujoco.MjModel.from_xml_string('<mujoco><worldbody><geom type="sphere" size=".1"/></worldbody></mujoco>')
+    changed = mujoco.MjModel.from_xml_string('<mujoco><worldbody><geom type="sphere" size=".2"/></worldbody></mujoco>')
+    def context(model):
+        return training.training_resume_metadata('fixture', config.env, SimpleNamespace(mj_model=model), vision=False, domain_randomization=False, network_config={})
+    assert context(first)['compiled_model_sha256'] == context(same)['compiled_model_sha256']
+    assert context(first)['compiled_model_sha256'] != context(changed)['compiled_model_sha256']
+
+
+def test_hydra_exposes_distinct_resume_option_and_rejects_conflicts():
+    from myosuite.envs.myo.myouser.hydra_cli import load_config_interactive
+    config = load_config_interactive(['rl.resume_training_path=source/training_state'], cfg_only=True)
+    assert config.rl.resume_training_path == 'source/training_state'
+    assert config.rl.load_checkpoint_path is None
+    with pytest.raises(ValueError, match='not both'):
+        load_config_interactive(['rl.resume_training_path=source/training_state', 'rl.load_checkpoint_path=policy/checkpoints/20'], cfg_only=True)
+    with pytest.raises(ValueError, match='evaluation mode'):
+        load_config_interactive(['rl.resume_training_path=source/training_state', 'run.play_only=True'], cfg_only=True)
+
+
 def test_checkpoint_only_logger_writes_locally_without_wandb(tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError('W&B must not be called when disabled')

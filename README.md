@@ -58,8 +58,11 @@ The preview preserves its seed; use **Resample Targets** to choose a new layout.
 
 Each training run records its effective configuration, source revision, package
 versions, hardware/backend, seeds, and checkpoint restore semantics in
-`run_manifest.json`. Checkpoint loading is a parameter warm start, not restoration
-of optimizer state or training step count. See [reproducibility and benchmarks](docs/reproducibility.md).
+`run_manifest.json`. Policy loading with `rl.load_checkpoint_path` is a parameter
+warm start. Single-host nonvision runs also save full snapshots under `training_state/`;
+use `rl.resume_training_path` to restore optimizer state, training progress,
+RNG and rollout state with the original total budget and configuration.
+See [exact continuation and reproducibility](docs/reproducibility.md#exact-training-continuation).
 
 ## Contributors
 

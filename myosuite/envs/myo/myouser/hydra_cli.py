@@ -106,6 +106,8 @@ class RLConfig:
     max_grad_norm: float = 1.0
     network_factory: NetworkConfig = field(default_factory=lambda: NetworkConfig())
     load_checkpoint_path: Union[str, None] = None
+    # Full optimizer/RNG/environment continuation; policy loading remains a warm start.
+    resume_training_path: Union[str, None] = None
 
 class VisionModes(str, Enum):
     rgbd = 'rgbd'

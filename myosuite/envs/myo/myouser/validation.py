@@ -103,6 +103,27 @@ def validate_vision_parameters(vision):
         boolean(vision["use_rasterizer"], "vision.use_rasterizer")
 
 
+def validate_restore_modes(rl, run=None, env=None, *, vision_enabled=None):
+    """Keep exact training continuation distinct from parameter warm starts."""
+    run, env = run or {}, env or {}
+    resume = rl.get("resume_training_path")
+    if resume in (None, "None"):
+        return
+    if not isinstance(resume, str) and not hasattr(resume, "__fspath__"):
+        raise ValueError("rl.resume_training_path must name a full training-state checkpoint.")
+    if not str(resume).strip():
+        raise ValueError("rl.resume_training_path cannot be empty.")
+    if rl.get("load_checkpoint_path") not in (None, "None"):
+        raise ValueError("Choose either rl.resume_training_path for exact continuation or rl.load_checkpoint_path for a parameter warm start, not both.")
+    if run.get("play_only", False) or env.get("eval_mode", False):
+        raise ValueError("Exact training resume cannot be combined with play_only or environment evaluation mode; use load_checkpoint_path for evaluation.")
+    if integer(rl.get("num_timesteps", 0), "rl.num_timesteps") == 0:
+        raise ValueError("Exact training resume requires the original positive rl.num_timesteps total horizon.")
+    vision = env.get("vision", {}).get("enabled", False) if vision_enabled is None else vision_enabled
+    if vision:
+        raise ValueError("Exact training resume is currently supported only without vision; Madrona renderer state cannot be restored exactly.")
+
+
 def validate_task_parameters(env, vision_enabled=None):
     if "eval_mode" in env:
         boolean(env["eval_mode"], "env.eval_mode")
@@ -149,5 +170,6 @@ def validate_training_config(config):
     validate_vision_parameters(config["env"].get("vision", {}))
     if "enabled" in config.get("wandb", {}):
         boolean(config["wandb"]["enabled"], "wandb.enabled")
+    validate_restore_modes(config["rl"], config.get("run", {}), config["env"], vision_enabled=config.get("vision", {}).get("enabled", False))
     validate_task_parameters(config["env"], config.get("vision", {}).get("enabled", False))
     return config

@@ -1,6 +1,7 @@
 import os
 import copy
 import functools
+import hashlib
 import json
 from etils import epath
 from absl import logging
@@ -28,6 +29,7 @@ from myosuite.train.myouser.custom_ppo import networks_vision_unified as network
 from myosuite.train.utils.wrapper import wrap_myosuite_training, _maybe_wrap_env_for_evaluation
 from myosuite.envs.myo.myouser.evaluate import evaluate_policy
 from myosuite.envs.myo.myouser.utils import render_traj
+from myosuite.envs.myo.myouser.validation import validate_restore_modes
 
 # class ProgressEvalVideoLoggerDEPRECATED:
 #   def __init__(self, logdir, eval_env,
@@ -366,6 +368,31 @@ def checkpoint_config_path(checkpoint_path):
     return (path if path.name == 'checkpoints' else path.parent) / 'config.json'
 
 
+def resolve_training_resume_path(path):
+    """Use only the full-state resolver, never the historical policy adapter."""
+    from myosuite.train.myouser.custom_ppo import resume
+    return resume.resolve(path)
+
+
+def training_resume_metadata(env_name, env_cfg, env, *, vision, domain_randomization, network_config):
+    """Describe the effective task and compiled assets used by full-state snapshots."""
+    model = getattr(env, 'mj_model', None)
+    model_digest = None
+    if model is not None:
+        import mujoco
+        binary = np.empty(mujoco.mj_sizeModel(model), dtype=np.uint8)
+        mujoco.mj_saveModel(model, buffer=binary)
+        model_digest = hashlib.sha256(binary.tobytes()).hexdigest()
+    return {
+        'environment_name': env_name,
+        'environment': env_cfg.to_dict(),
+        'compiled_model_sha256': model_digest,
+        'vision': bool(vision),
+        'domain_randomization': bool(domain_randomization),
+        'network_factory': network_config.to_dict() if hasattr(network_config, 'to_dict') else dict(network_config),
+    }
+
+
 def adapt_legacy_checkpoint_observations(env, env_cfg, checkpoint_params):
     """Recover the witnessed duplicated omni tail in historical policies.
 
@@ -437,7 +464,8 @@ def train_or_load_checkpoint(env_name,
                     domain_randomization=False,
                     rscope_envs=None,
                     deterministic_rscope=True,
-                    seed=1,):
+                    seed=1,
+                    resume_training_path=None):
     
     # Evaluation overrides and environment construction must not mutate the
     # caller's configuration or the configuration stored beside a checkpoint.
@@ -446,6 +474,20 @@ def train_or_load_checkpoint(env_name,
     ppo_params = config.rl
     if vision is None:
         vision = bool(config.vision.enabled)
+    if resume_training_path is None:
+        resume_training_path = ppo_params.get('resume_training_path')
+    if checkpoint_path is None:
+        checkpoint_path = ppo_params.get('load_checkpoint_path')
+    restore_options = dict(ppo_params)
+    restore_options['load_checkpoint_path'] = checkpoint_path
+    restore_options['resume_training_path'] = resume_training_path
+    validate_restore_modes(restore_options, config.get('run', {}), dict(env_cfg, eval_mode=bool(eval_mode or env_cfg.get('eval_mode', False))), vision_enabled=vision)
+    if resume_training_path == 'None':
+        resume_training_path = None
+    if resume_training_path is not None:
+        resume_training_path = resolve_training_resume_path(resume_training_path)
+        with ppo_params.unlocked():
+            ppo_params.resume_training_path = str(resume_training_path)
     log_wandb = bool(config.get('wandb', {}).get('enabled', False))
     log_wandb_checkpoints = log_wandb and log_wandb_checkpoints
     log_wandb_videos = log_wandb and log_wandb_videos
@@ -479,7 +521,7 @@ def train_or_load_checkpoint(env_name,
         ckpt_path.mkdir(parents=True, exist_ok=True)
         print(f"Checkpoint path: {ckpt_path}")
     else:
-        assert checkpoint_path is not None, "Either logdir or checkpoint_path must be provided"
+        assert checkpoint_path is not None or resume_training_path is not None, "Either logdir, checkpoint_path or resume_training_path must be provided"
     if vision:
         env_cfg.vision.render_batch_size = ppo_params.num_envs
         env_cfg.vision.num_worlds = ppo_params.num_envs
@@ -488,6 +530,11 @@ def train_or_load_checkpoint(env_name,
         adapt_legacy_checkpoint_observations(
             env, env_cfg, ppo_checkpoint.load(restore_checkpoint_path)
         )
+    resume_context = training_resume_metadata(
+        env_name, env_cfg, env, vision=vision,
+        domain_randomization=domain_randomization,
+        network_config=getattr(ppo_params, 'network_factory', {}),
+    )
     if ckpt_path is not None:
         with open(ckpt_path / "config.json", "w", encoding="utf-8") as fp:
             json.dump(config.to_dict(), fp, indent=4)
@@ -544,6 +591,15 @@ def train_or_load_checkpoint(env_name,
     
     if "load_checkpoint_path" in training_params:
         del training_params["load_checkpoint_path"]
+    training_params.pop('resume_training_path', None)
+    save_training_state_path = None
+    if ppo_params.num_timesteps > 0 and ppo_params.get('num_checkpoints', 1) > 0:
+        if vision:
+            logging.warning('Full training-state snapshots are unavailable for vision: external renderer state cannot be restored exactly. Policy checkpoints are still saved.')
+        elif jax.process_count() != 1:
+            logging.warning('Full training-state snapshots are unavailable for multi-process training. Policy checkpoints are still saved.')
+        else:
+            save_training_state_path = logdir / 'training_state'
 
     train_fn = functools.partial(
         ppo.train,
@@ -552,6 +608,9 @@ def train_or_load_checkpoint(env_name,
         # policy_params_fn=policy_params_fn,
         seed=seed,
         restore_checkpoint_path=restore_checkpoint_path,
+        resume_training_path=resume_training_path,
+        save_training_state_path=save_training_state_path,
+        resume_metadata=resume_context,
         # save_checkpoint_path=ckpt_path,
         # wrap_env_fn=None if vision else wrapper.wrap_for_brax_training,
         # wrap_env_fn=(lambda x, **kwargs: x) if vision else wrap_myosuite_training,

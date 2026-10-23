@@ -16,11 +16,89 @@ rather than borrowing the revision of an unrelated enclosing project.
 
 When loading a checkpoint, the manifest identifies the resolved numbered step
 and hashes its filenames and bytes, so policy identity survives relocation.
-The current checkpoint format restores policy/value/normalizer parameters. It
-does **not** restore optimizer state or the original training step count. A run
-that trains after loading is labeled `parameter_warm_start`; `play_only` and
-environment evaluation mode are labeled `evaluation`. Evaluation never writes
-to the source checkpoint directory or changes the caller's configuration.
+Policy checkpoints under `checkpoints/` restore policy/value/normalizer
+parameters. Loading them with `rl.load_checkpoint_path` is a
+`parameter_warm_start`: it starts a new optimizer and training schedule.
+`play_only` and environment evaluation mode are labeled `evaluation`.
+Evaluation never writes to the source checkpoint directory or changes the
+caller's configuration.
+
+## Exact training continuation
+
+New nonvision training runs also save full training-state snapshots under
+`training_state/` when `rl.num_checkpoints` is positive. These snapshots retain
+optimizer state, the global training step, RNG streams, and the running
+environment state. Their integrity and complete configuration are checked
+before restoration. Resume with the separate Hydra option
+`rl.resume_training_path`; a run directory, its `training_state` directory,
+or an individual completed step can be supplied. Root directories select the
+latest completed snapshot and ignore unfinished writes.
+
+For example, start a run with a total 15-million-step budget:
+
+```bash
+python -m myosuite.envs.myo.myouser.train_jax_ppo wandb=disabled run.suffix=initial rl.num_timesteps=15000000 rl.num_checkpoints=5
+```
+
+Continue from its most recent full snapshot into a separate output run:
+
+```bash
+python -m myosuite.envs.myo.myouser.train_jax_ppo wandb=disabled run.suffix=continued rl.num_timesteps=15000000 rl.num_checkpoints=5 rl.resume_training_path=/path/to/initial-run/training_state
+```
+
+Keep `rl.num_timesteps` at the **original total horizon**, not the number of
+remaining steps or an increased budget. Keep the original environment, model
+assets, network configuration, training hyperparameters, seed, dependency
+versions, backend, and device topology. Mismatches fail explicitly. Logging
+names and the destination run can change; source snapshots remain untouched.
+The CLI examples above use the same default task configuration. For a custom
+task, repeat all original Hydra overrides: selecting a snapshot does not
+silently replace the requested configuration. Alternatively, load the
+resolved configuration saved with that run in Python:
+
+```python
+from omegaconf import OmegaConf
+from myosuite.envs.myo.myouser.train_jax_ppo import train
+
+cfg = OmegaConf.load("/path/to/initial-run/checkpoints/config.json")
+cfg.rl.load_checkpoint_path = None
+cfg.rl.resume_training_path = "/path/to/initial-run/training_state"
+cfg.run.suffix = "continued"
+if cfg.wandb.enabled:
+    cfg.wandb.name = "continued-run"
+train(cfg)
+```
+
+The task fingerprint includes the effective environment configuration and a
+hash of the compiled MuJoCo model, so changing included assets at the same
+model path is detected.
+
+Exact continuation cannot be combined with `rl.load_checkpoint_path`,
+`run.play_only`, environment evaluation mode, or a zero training horizon.
+Historical policy-only checkpoints cannot be used as full-state snapshots;
+use `rl.load_checkpoint_path` for their parameter warm-start behavior. The
+legacy observation migration applies only to policy loading and is never
+used to bypass full-state compatibility checks. No new UI preset fields are
+required: the existing UI checkpoint selector retains its warm-start meaning.
+
+Full-state continuation currently supports nonvision training on a single
+process with the same backend and topology. Madrona's external renderer state
+has no verified snapshot contract, so vision runs retain policy checkpoints
+and emit a warning instead of writing full-state snapshots. Explicit vision
+resume is rejected. Fresh multi-process runs likewise retain policy-only
+checkpoints and warn that exact full-state snapshots are unavailable.
+
+CPU interruption tests compare the resumed and uninterrupted learner, optimizer,
+normalizer, rollout state, RNG and logging counters bit for bit. Exact numerical
+continuation requires deterministic kernels in the matching runtime. Elapsed
+wall-clock measurements and external tracking/video side effects are outside
+that comparison. Snapshots commit learner progress before evaluation/export
+callbacks; resume does not replay those callbacks for the saved boundary.
+
+The manifest labels this mode `exact_training_resume` and records the resolved
+source path, source step, and content digest. Restoration flags remain false
+while the run is only requested (`status: started`); successful restoration
+and training mark optimizer, step, RNG, and environment restoration as verified.
 
 The shipped mobile/public policies contain 54 input features although their
 historical JSON declares 49. Their saved means, standard deviations and variance

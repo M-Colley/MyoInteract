@@ -28,7 +28,7 @@ import jax
 from absl import app
 from absl import flags
 from absl import logging
-from myosuite.train.utils.train import resolve_checkpoint_path, train_or_load_checkpoint
+from myosuite.train.utils.train import resolve_checkpoint_path, resolve_training_resume_path, train_or_load_checkpoint
 from myosuite.train.utils.wrapper import _maybe_wrap_env_for_evaluation
 from myosuite.envs.myo.myouser.evaluate import evaluate_policy
 from myosuite.envs.myo.myouser.utils import render_traj, ProgressLogger, set_global_seed
@@ -88,6 +88,15 @@ def train(cfg: Config):
   config = ConfigDict(container)
   if config.rl.load_checkpoint_path not in (None, "None"):
     config.rl.load_checkpoint_path = str(resolve_checkpoint_path(config.rl.load_checkpoint_path))
+  resume_training_path = config.rl.get('resume_training_path')
+  resume_step = None
+  if resume_training_path not in (None, "None"):
+    from myosuite.train.myouser.custom_ppo import resume
+    resume_training_path = resolve_training_resume_path(resume_training_path)
+    config.rl.resume_training_path = str(resume_training_path)
+    resume_step = resume.read_metadata(resume_training_path)['step']
+  else:
+    resume_training_path = None
   print(f"Config: ", OmegaConf.to_yaml(container), sep='\n')
   """Run training and evaluation for the specified environment."""
 
@@ -125,6 +134,7 @@ def train(cfg: Config):
 
   manifest = create_run_manifest(
       config, checkpoint_path=config.rl.load_checkpoint_path,
+      resume_training_path=resume_training_path, resume_step=resume_step,
       backend=jax.default_backend(), devices=jax.devices(),
   )
   write_run_manifest(logdir, manifest)
@@ -162,6 +172,7 @@ def train(cfg: Config):
                     eval_mode=env_cfg.eval_mode,
                     logdir=logdir,
                     checkpoint_path=config.rl.load_checkpoint_path,
+                    resume_training_path=resume_training_path,
                     progress_fn=progress_fn,
                     wandb_run=wandb_run,
                     log_wandb_videos=config.wandb.enabled and not config.run.play_only and config.run.log_wandb_videos,
@@ -171,6 +182,9 @@ def train(cfg: Config):
                     rscope_envs=config.run.rscope_envs,
                     deterministic_rscope=config.run.deterministic_rscope,
                     seed=config.run.seed)
+  if resume_training_path is not None:
+    for field in ('optimizer_state_restored', 'training_step_restored', 'rng_state_restored', 'environment_state_restored', 'restoration_verified'):
+      manifest['restore'][field] = True
   effective_config = config.to_dict()
   effective_config['env'] = env._config.to_dict()
   update_manifest_config(manifest, effective_config)

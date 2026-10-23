@@ -66,10 +66,12 @@ def _git_revision(source):
         return {"commit": None, "dirty": None}
 
 
-def create_run_manifest(config, *, checkpoint_path=None, backend=None, devices=()):
+def create_run_manifest(config, *, checkpoint_path=None, resume_training_path=None, resume_step=None, backend=None, devices=()):
     """Snapshot effective config, code, dependencies, seeds, and restore semantics."""
     if hasattr(config, "to_dict"):
         config = config.to_dict()
+    if checkpoint_path == "None":
+        checkpoint_path = None
     # Round-trip to detach the snapshot from the caller's mutable configuration.
     effective = json.loads(json.dumps(config, allow_nan=False))
     canonical = json.dumps(effective, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -80,7 +82,19 @@ def create_run_manifest(config, *, checkpoint_path=None, backend=None, devices=(
         except metadata.PackageNotFoundError:
             versions[package] = None
     run = effective.get("run", {})
-    if run.get("play_only") or effective.get("env", {}).get("eval_mode"):
+    if resume_training_path is None:
+        resume_training_path = effective.get("rl", {}).get("resume_training_path")
+    if resume_training_path == "None":
+        resume_training_path = None
+    if resume_training_path is not None and checkpoint_path not in (None, "None"):
+        raise ValueError("An exact training resume cannot also be a parameter warm start.")
+    if resume_training_path is not None:
+        if run.get("play_only") or effective.get("env", {}).get("eval_mode"):
+            raise ValueError("Exact training resume is incompatible with evaluation mode.")
+        mode = "exact_training_resume"
+        if resume_step is None and Path(resume_training_path).name.isdigit():
+            resume_step = int(Path(resume_training_path).name)
+    elif run.get("play_only") or effective.get("env", {}).get("eval_mode"):
         mode = "evaluation"
     elif checkpoint_path and str(checkpoint_path) != "None":
         mode = "parameter_warm_start"
@@ -97,8 +111,15 @@ def create_run_manifest(config, *, checkpoint_path=None, backend=None, devices=(
             "mode": mode,
             "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
             "checkpoint_sha256": checkpoint_digest(checkpoint_path) if checkpoint_path else None,
+            "resume_training_path": str(resume_training_path) if resume_training_path else None,
+            "resume_training_sha256": checkpoint_digest(resume_training_path) if resume_training_path else None,
+            "source_training_step": resume_step,
+            # These describe completed restoration, not a request that may fail.
+            "restoration_verified": False,
             "optimizer_state_restored": False,
             "training_step_restored": False,
+            "rng_state_restored": False,
+            "environment_state_restored": False,
         },
         "seeds": {key: run.get(key) for key in ("seed", "eval_seed")},
         "runtime": {
